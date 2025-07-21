@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "User Agent Scraper",
+  "version": "1.0.0",
+  "description": "Scrape user agents from useragents.io with auto-refresh and deduplication",
+  "permissions": [
+    "tabs",
+    "activeTab",
+    "storage",
+    "scripting",
+    "sidePanel",
+    "downloads"
+  ],
+  "host_permissions": [
+    "https://useragents.io/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://useragents.io/*"],
+      "js": ["content.js"]
+    }
+  ],
+  "action": {
+    "default_title": "User Agent Scraper"
+  },
+  "side_panel": {
+    "default_path": "popup.html"
+  },
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  }
+}
