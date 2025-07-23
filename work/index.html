@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>User Agent Scraper - Full Page</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="fullpage">
+  <div class="fullpage-container">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-content">
+        <h1>🕷️ User Agent Scraper</h1>
+        <p class="subtitle">Professional User Agent Collection Tool</p>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <!-- Left Panel - Controls -->
+      <aside class="sidebar">
+        <div class="controls">
+          <div class="input-group">
+            <label for="targetCount">Target User Agents:</label>
+            <input type="number" id="targetCount" value="10000" min="100" max="100000" step="100">
+          </div>
+
+          <div class="filter-group">
+            <label>Device Filters:</label>
+            <div class="checkbox-group">
+              <label class="checkbox-label">
+                <input type="checkbox" id="filterAndroid" checked>
+                <span>Android 11+</span>
+              </label>
+              <label class="checkbox-label">
+                <input type="checkbox" id="filterWindows">
+                <span>Windows</span>
+              </label>
+              <label class="checkbox-label">
+                <input type="checkbox" id="filterIOS" checked>
+                <span>iOS 15+</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="multi-tab-group">
+            <label>Scraping Mode:</label>
+            <div class="tab-mode-selection">
+              <label class="radio-label">
+                <input type="radio" name="tabMode" id="singleTabMode" value="single" checked>
+                <span>Single Tab</span>
+              </label>
+              <label class="radio-label">
+                <input type="radio" name="tabMode" id="dualTabMode" value="dual">
+                <span>🚀 Dual Tab</span>
+              </label>
+              <label class="radio-label">
+                <input type="radio" name="tabMode" id="quadTabMode" value="quad">
+                <span>⚡ Quad Tab</span>
+              </label>
+            </div>
+            <small class="tab-mode-help">
+              <span id="tabModeDescription">Standard single tab scraping</span>
+            </small>
+          </div>
+
+          <div class="auto-save-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="autoSaveEnabled">
+              <span>Auto-save to USER_AGENTS.TXT</span>
+            </label>
+            <div id="savePathConfig" class="save-path-config" style="display: none;">
+              <div class="path-input-group">
+                <label for="savePath">Base Path:</label>
+                <input type="text" id="savePath" placeholder="C:\DATA-AFS" class="path-input">
+              </div>
+              
+              <div class="subfolder-input-group">
+                <label for="subfolders">Subfolders:</label>
+                <input type="text" id="subfolders" placeholder="RDP1, RDP2, RDP3..." class="path-input">
+              </div>
+              
+              <div class="validate-group">
+                <button id="validatePathsBtn" class="btn btn-small">Validate</button>
+                <div id="validationResult" class="validation-result"></div>
+              </div>
+            </div>
+          </div>
+          
+          <div class="button-group">
+            <button id="startBtn" class="btn btn-primary">Start Scraping</button>
+            <button id="stopBtn" class="btn btn-secondary" disabled>Stop</button>
+            <button id="checkDuplicatesBtn" class="btn btn-info">Remove Duplicates</button>
+          </div>
+          
+          <!-- Notification for Remove Duplicates -->
+          <div id="duplicateNotification" class="duplicate-notification hidden"></div>
+        </div>
+      </aside>
+
+      <!-- Right Panel - Results -->
+      <section class="content-area">
+        <!-- Progress Section -->
+        <div class="progress-section">
+          <div class="progress-info">
+            <span id="progressText">Ready to start...</span>
+            <span id="statsText">0 / 0</span>
+          </div>
+          <div class="progress-bar">
+            <div id="progressFill" class="progress-fill"></div>
+          </div>
+          <div class="stats">
+            <span id="uniqueCount">Unique: 0</span>
+            <span id="totalCount">Total: 0</span>
+            <span id="refreshCount">Refreshes: 0</span>
+          </div>
+        </div>
+
+        <!-- Results Section -->
+        <div class="results-section">
+          <div class="results-header">
+            <h3>Results:</h3>
+            <div class="result-buttons">
+              <button id="copyBtn" class="btn btn-success" disabled>Copy All</button>
+              <button id="clearBtn" class="btn btn-danger">Clear</button>
+            </div>
+          </div>
+          <textarea id="resultsTextarea" placeholder="User agents will appear here..." readonly></textarea>
+        </div>
+
+        <!-- Status Section -->
+        <div class="status-section">
+          <div id="statusText" class="status">Ready</div>
+        </div>
+
+        <!-- Debug Log Section -->
+        <div class="debug-section">
+          <div class="debug-header">
+            <h4>Debug Log:</h4>
+            <button id="clearLogBtn" class="btn btn-small">Clear Log</button>
+          </div>
+          <div id="debugLog" class="debug-log"></div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <div class="footer-content">
+        <p>Powered by <strong>ERDigital Media</strong></p>
+      </div>
+    </footer>
+  </div>
+
+  <script src="index.js"></script>
+</body>
+</html>

@@ -1,14 +1,13 @@
 {
   "manifest_version": 3,
   "name": "User Agent Scraper",
-  "version": "1.0.0",
-  "description": "Scrape user agents from useragents.io with auto-refresh and deduplication",
+  "version": "1.3.0",
+  "description": "Scrape user agents with auto-refresh, smart duplicate removal, and auto tab management",
   "permissions": [
     "tabs",
     "activeTab",
     "storage",
     "scripting",
-    "sidePanel",
     "downloads"
   ],
   "host_permissions": [
@@ -25,9 +24,6 @@
   ],
   "action": {
     "default_title": "User Agent Scraper"
-  },
-  "side_panel": {
-    "default_path": "popup.html"
   },
   "icons": {
     "16": "icon.png",

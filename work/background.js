@@ -2,7 +2,7 @@
 let scrapingState = {
     isRunning: false,
     targetCount: 0,
-    userAgents: new Set(),
+    userAgents: [], // Changed from Set to Array for better performance
     totalScraped: 0,
     refreshCount: 0,
     currentTabId: null,
@@ -10,17 +10,26 @@ let scrapingState = {
     lastRefreshTime: null,
     pageLoadTimeout: null,
     isPageLoading: false,
+    tabMode: 'single', // 'single', 'dual', 'quad'
+    multiTabs: {
+        tabA: { id: null, isActive: false, role: 'A' },
+        tabB: { id: null, isActive: false, role: 'B' },
+        tabC: { id: null, isActive: false, role: 'C' },
+        tabD: { id: null, isActive: false, role: 'D' },
+        activeTab: 'A',
+        offsetDelay: 1000 // 1 second offset between tabs
+    },
     filters: {
         android: true,
-        windows: true,
+        windows: false,
         ios: true
     },
-    antiRateLimit: {
-        minDelay: 1000,      // Minimum 1 seconds
-        maxDelay: 5000,     // Maximum 5 seconds
-        currentDelay: 2000,  // Current delay
-        consecutiveErrors: 0,
-        lastRequestTime: 0
+    simpleDelay: 1500, // Simple 1.5 second delay between refreshes
+    autoDuplicateRemoval: {
+        enabled: true,
+        lastCheckCount: 0,
+        checkInterval: 25000, // Check every 20K user agents
+        isProcessing: false
     }
 };
 
@@ -32,15 +41,58 @@ const STORAGE_KEYS = {
     SCRAPING_STATE: 'scrapingState'
 };
 
+// Close all other tabs except extension and keep tabs
+async function closeAllOtherTabs(keepTabIds = []) {
+    try {
+        console.log('Background: Closing all other tabs...');
+        const allTabs = await chrome.tabs.query({});
+        const extensionUrl = chrome.runtime.getURL('index.html');
+        
+        console.log(`Background: Found ${allTabs.length} total tabs`);
+        
+        for (const tab of allTabs) {
+            // Skip extension tab (index.html)
+            if (tab.url && tab.url.includes('index.html') && tab.url.startsWith('chrome-extension://')) {
+                console.log(`Background: Keeping extension tab: ${tab.url}`);
+                continue;
+            }
+            
+            // Skip tabs in keepTabIds array
+            if (keepTabIds.includes(tab.id)) {
+                console.log(`Background: Keeping specified tab ID: ${tab.id}`);
+                continue;
+            }
+            
+            try {
+                await chrome.tabs.remove(tab.id);
+                console.log(`Background: Closed tab: ${tab.url}`);
+            } catch (error) {
+                console.log(`Background: Could not close tab ${tab.id}: ${error.message}`);
+            }
+        }
+        
+        console.log('Background: Finished closing other tabs');
+    } catch (error) {
+        console.error('Background: Error in closeAllOtherTabs:', error);
+    }
+}
+
 // Initialize extension
 chrome.runtime.onInstalled.addListener(() => {
     console.log('User Agent Scraper: Extension installed');
     resetScrapingState();
 });
 
-// Handle action click to open side panel
-chrome.action.onClicked.addListener((tab) => {
-    chrome.sidePanel.open({ tabId: tab.id });
+// Handle action click to open extension in new tab
+chrome.action.onClicked.addListener(async (tab) => {
+    // First, create extension tab
+    const extensionTab = await chrome.tabs.create({
+        url: chrome.runtime.getURL('index.html'),
+        active: true
+    });
+    
+    // Then close all other tabs (except the new extension tab)
+    await closeAllOtherTabs([extensionTab.id]);
 });
 
 // Handle messages dari popup dan content scripts
@@ -64,12 +116,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             handleClearData(sendResponse);
             break;
 
-        case 'checkDuplicates':
-            handleCheckDuplicates(sendResponse);
+        case 'removeDuplicates':
+            handleRemoveDuplicates(sendResponse);
+            break;
+
+        case 'validateFolders':
+            handleValidateFolders(message, sendResponse);
             break;
 
         case 'pageReady':
             handlePageReady(sender, sendResponse);
+            break;
+
+        case 'pageIssueDetected':
+            handlePageIssueDetected(message, sender, sendResponse);
             break;
 
         default:
@@ -94,7 +154,8 @@ async function handleStartScraping(message, sendResponse) {
         scrapingState.isRunning = true;
         scrapingState.targetCount = message.targetCount;
         scrapingState.filters = message.filters || { android: true, windows: true, ios: true };
-        scrapingState.userAgents = new Set();
+        scrapingState.tabMode = message.tabMode || 'single';
+        scrapingState.userAgents = []; // Initialize as empty array
         scrapingState.totalScraped = 0;
         scrapingState.refreshCount = 0;
         scrapingState.startTime = Date.now();
@@ -102,23 +163,71 @@ async function handleStartScraping(message, sendResponse) {
         // Save initial state
         await saveScrapingState();
 
-        // Navigate current tab to useragents.io
-        const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        await chrome.tabs.update(currentTab.id, {
-            url: 'https://useragents.io/random?limit=1500'
-        });
+        if (scrapingState.tabMode === 'dual') {
+            // Create dual tabs for faster scraping
+            console.log('Background: Starting dual tab mode');
+            await initializeMultiTabs(['A', 'B']);
+            
+            sendResponse({
+                success: true,
+                message: 'Dual tab scraping started',
+                mode: 'dual',
+                tabIds: [scrapingState.multiTabs.tabA.id, scrapingState.multiTabs.tabB.id]
+            });
 
-        scrapingState.currentTabId = currentTab.id;
-        await saveScrapingState();
+            // Start multi tab scraping
+            setTimeout(() => startMultiTabScraping(['A', 'B']), 2000);
+            
+        } else if (scrapingState.tabMode === 'quad') {
+            // Create quad tabs for maximum speed
+            console.log('Background: Starting quad tab mode');
+            await initializeMultiTabs(['A', 'B', 'C', 'D']);
+            
+            sendResponse({
+                success: true,
+                message: 'Quad tab scraping started',
+                mode: 'quad',
+                tabIds: [
+                    scrapingState.multiTabs.tabA.id, 
+                    scrapingState.multiTabs.tabB.id,
+                    scrapingState.multiTabs.tabC.id, 
+                    scrapingState.multiTabs.tabD.id
+                ]
+            });
 
-        sendResponse({
-            success: true,
-            message: 'Scraping started',
-            tabId: currentTab.id
-        });
+            // Start multi tab scraping
+            setTimeout(() => startMultiTabScraping(['A', 'B', 'C', 'D']), 2000);
+            
+        } else {
+            // Single tab mode - create new tab instead of using current tab
+            console.log('Background: Starting single tab mode');
+            
+            // Get current extension tab before closing others
+            const extensionTab = await getCurrentExtensionTab();
+            const keepTabs = extensionTab ? [extensionTab.id] : [];
+            
+            // Close all other tabs except extension tab
+            await closeAllOtherTabs(keepTabs);
+            
+            // Create new tab for scraping
+            const scrapingTab = await chrome.tabs.create({
+                url: 'https://useragents.io/random?limit=1500',
+                active: true
+            });
 
-        // Start scraping process - wait for page to load
-        setTimeout(() => waitForPageReady(), 2000);
+            scrapingState.currentTabId = scrapingTab.id;
+            await saveScrapingState();
+
+            sendResponse({
+                success: true,
+                message: 'Single tab scraping started',
+                mode: 'single',
+                tabId: scrapingTab.id
+            });
+
+            // Start scraping process - wait for page to load
+            setTimeout(() => waitForPageReady(), 2000);
+        }
 
     } catch (error) {
         console.error('Background: Error starting scraping:', error);
@@ -133,8 +242,12 @@ async function handleStopScraping(sendResponse) {
         console.log('Background: Stopping scraping');
         scrapingState.isRunning = false;
         
-        // Just reset the tab reference (don't close tab since we're using same tab)
+        // Close all useragents.io tabs when stopping
+        await closeUserAgentTabs();
+        
+        // Reset tab references
         scrapingState.currentTabId = null;
+        resetMultiTabIds();
 
         await saveScrapingState();
         sendResponse({ success: true, message: 'Scraping stopped' });
@@ -148,17 +261,16 @@ async function handleStopScraping(sendResponse) {
 // Handle get scraping state
 async function handleGetScrapingState(sendResponse) {
     try {
-        const userAgentsArray = Array.from(scrapingState.userAgents);
         sendResponse({
             success: true,
             state: {
                 isRunning: scrapingState.isRunning,
                 targetCount: scrapingState.targetCount,
-                userAgents: userAgentsArray,
-                uniqueCount: scrapingState.userAgents.size,
+                userAgents: scrapingState.userAgents,
+                uniqueCount: scrapingState.userAgents.length,
                 totalScraped: scrapingState.totalScraped,
                 refreshCount: scrapingState.refreshCount,
-                progress: scrapingState.targetCount > 0 ? (scrapingState.userAgents.size / scrapingState.targetCount) * 100 : 0
+                progress: scrapingState.targetCount > 0 ? (scrapingState.userAgents.length / scrapingState.targetCount) * 100 : 0
             }
         });
     } catch (error) {
@@ -179,31 +291,120 @@ async function handleClearData(sendResponse) {
     }
 }
 
-// Handle check duplicates
-function handleCheckDuplicates(sendResponse) {
+// Handle remove duplicates
+async function handleRemoveDuplicates(sendResponse) {
     try {
-        const userAgentsArray = Array.from(scrapingState.userAgents);
-        const duplicates = [];
-        const seen = new Set();
+        const beforeCount = scrapingState.userAgents.length;
+        console.log(`Background: Removing duplicates from ${beforeCount} user agents...`);
         
-        userAgentsArray.forEach(ua => {
-            if (seen.has(ua)) {
-                duplicates.push(ua);
-            } else {
-                seen.add(ua);
+        // Efficient deduplication using Map for O(1) lookup
+        const uniqueMap = new Map();
+        const uniqueArray = [];
+        
+        scrapingState.userAgents.forEach(ua => {
+            if (!uniqueMap.has(ua)) {
+                uniqueMap.set(ua, true);
+                uniqueArray.push(ua);
             }
         });
-
+        
+        const afterCount = uniqueArray.length;
+        const removedCount = beforeCount - afterCount;
+        
+        // Update state with deduplicated array
+        scrapingState.userAgents = uniqueArray;
+        
+        // Save updated state
+        await saveScrapingState();
+        
+        console.log(`Background: Removed ${removedCount} duplicates. ${afterCount} unique user agents remaining.`);
+        
         sendResponse({
             success: true,
-            duplicates: duplicates,
-            duplicateCount: duplicates.length,
-            uniqueCount: seen.size,
-            totalCount: userAgentsArray.length
+            beforeCount: beforeCount,
+            afterCount: afterCount,
+            removedCount: removedCount,
+            message: `Removed ${removedCount} duplicates. ${afterCount} unique user agents remaining.`
         });
     } catch (error) {
-        console.error('Background: Error checking duplicates:', error);
+        console.error('Background: Error removing duplicates:', error);
         sendResponse({ success: false, error: error.message });
+    }
+}
+
+// Handle validate folders - check if directories exist on filesystem
+async function handleValidateFolders(message, sendResponse) {
+    try {
+        const { basePath, subfolders } = message;
+        console.log('Background: Validating folders:', { basePath, subfolders });
+        
+        if (!basePath || !subfolders || !Array.isArray(subfolders)) {
+            sendResponse({
+                success: false,
+                error: 'Invalid parameters: basePath and subfolders array required'
+            });
+            return;
+        }
+        
+        // Since browser extensions have limited filesystem access,
+        // we'll use a simplified validation approach
+        const validFolders = [];
+        const invalidFolders = [];
+        const results = [];
+        
+        // For each subfolder, we'll simulate a validation
+        // In a real extension, you'd need native messaging or File System Access API
+        for (const subfolder of subfolders) {
+            try {
+                // Validate folder name format
+                const isValidName = /^[a-zA-Z0-9_-]+$/.test(subfolder);
+                
+                if (isValidName && subfolder.length > 0 && subfolder.length <= 50) {
+                    // For browser extension, we'll assume folders exist if they have valid names
+                    // This is a limitation of browser security model
+                    validFolders.push(subfolder);
+                    results.push({
+                        folder: subfolder,
+                        exists: true,
+                        path: `${basePath}\\${subfolder}`,
+                        message: 'Folder name is valid (actual existence cannot be verified due to browser security)'
+                    });
+                } else {
+                    invalidFolders.push(subfolder);
+                    results.push({
+                        folder: subfolder,
+                        exists: false,
+                        path: `${basePath}\\${subfolder}`,
+                        message: 'Invalid folder name format'
+                    });
+                }
+            } catch (error) {
+                invalidFolders.push(subfolder);
+                results.push({
+                    folder: subfolder,
+                    exists: false,
+                    path: `${basePath}\\${subfolder}`,
+                    message: `Validation error: ${error.message}`
+                });
+            }
+        }
+        
+        console.log(`Background: Validation complete - ${validFolders.length} valid, ${invalidFolders.length} invalid`);
+        
+        sendResponse({
+            success: true,
+            validFolders: validFolders,
+            invalidFolders: invalidFolders,
+            results: results,
+            message: `Validated ${validFolders.length}/${subfolders.length} folders`
+        });
+        
+    } catch (error) {
+        console.error('Background: Error validating folders:', error);
+        sendResponse({
+            success: false,
+            error: error.message
+        });
     }
 }
 
@@ -215,6 +416,22 @@ function handlePageReady(sender, sendResponse) {
         setTimeout(() => extractFromCurrentPage(), 200);
     }
     sendResponse({ success: true });
+}
+
+// Handle page issue detection (Cloudflare, rate limit, etc.)
+function handlePageIssueDetected(message, sender, sendResponse) {
+    const { issueType, url } = message;
+    const tabId = sender.tab?.id;
+    
+    console.log(`Background: Page issue detected in tab ${tabId}: ${issueType} at ${url}`);
+    
+    // Notify popup about the issue
+    notifyPopup('warning', `${issueType} detected, auto-refreshing in 3 seconds...`);
+    
+    // Log the issue for debugging
+    console.log(`Background: Handling ${issueType} - page will auto-refresh`);
+    
+    sendResponse({ success: true, message: `${issueType} detected, handling automatically` });
 }
 
 // Main scraping process
@@ -248,39 +465,50 @@ async function extractFromCurrentPage() {
         });
 
         if (response.success && response.userAgents) {
-            // Add new user agents ke Set (auto deduplication)
-            const initialSize = scrapingState.userAgents.size;
+            // Add new user agents to Array (no auto deduplication for performance)
+            const initialCount = scrapingState.userAgents.length;
             response.userAgents.forEach(ua => {
                 if (ua && ua.trim()) {
-                    scrapingState.userAgents.add(ua.trim());
+                    scrapingState.userAgents.push(ua.trim());
                 }
             });
 
-            const newUserAgents = scrapingState.userAgents.size - initialSize;
+            const newUserAgents = scrapingState.userAgents.length - initialCount;
             scrapingState.totalScraped += response.userAgents.length;
             scrapingState.refreshCount++;
 
-            // Reset error counter on successful extraction (anti-rate-limit)
-            scrapingState.antiRateLimit.consecutiveErrors = 0;
+            // Successfully extracted data
 
-            console.log(`Background: Extracted ${response.userAgents.length} UAs, ${newUserAgents} new unique, total unique: ${scrapingState.userAgents.size}`);
+            console.log(`Background: Extracted ${response.userAgents.length} UAs, ${newUserAgents} new added, total collected: ${scrapingState.userAgents.length}`);
+
+            // Check if auto duplicate removal should be triggered
+            await checkAutoRemoveDuplicates();
 
             // Save state
             await saveScrapingState();
 
             // Notify popup
             notifyPopup('progress', {
-                uniqueCount: scrapingState.userAgents.size,
+                uniqueCount: scrapingState.userAgents.length,
                 totalScraped: scrapingState.totalScraped,
                 refreshCount: scrapingState.refreshCount,
-                progress: scrapingState.targetCount > 0 ? (scrapingState.userAgents.size / scrapingState.targetCount) * 100 : 0
+                progress: scrapingState.targetCount > 0 ? (scrapingState.userAgents.length / scrapingState.targetCount) * 100 : 0
             });
 
             // Check if target reached
-            if (scrapingState.userAgents.size >= scrapingState.targetCount) {
+            if (scrapingState.userAgents.length >= scrapingState.targetCount) {
                 console.log('Background: Target reached!');
-                await handleStopScraping(() => {});
-                notifyPopup('completed', `Target reached! Collected ${scrapingState.userAgents.size} unique user agents`);
+                scrapingState.isRunning = false;
+                
+                // Close all useragents.io tabs when target reached
+                await closeUserAgentTabs();
+                
+                // Reset tab references
+                scrapingState.currentTabId = null;
+                resetMultiTabIds();
+                
+                await saveScrapingState();
+                notifyPopup('completed', `Target reached! Collected ${scrapingState.userAgents.length} user agents`);
                 return;
             }
 
@@ -368,78 +596,44 @@ async function sendMessageWithRetry(tabId, message, maxRetries = 3) {
     throw new Error(`Failed to send message after ${maxRetries} attempts`);
 }
 
-// Refresh page and continue scraping
+// Refresh page and continue scraping (simplified)
 async function refreshPageAndContinue() {
     if (!scrapingState.isRunning || !scrapingState.currentTabId) {
         return;
     }
 
     try {
-        // Calculate intelligent delay based on previous responses
-        const intelligentDelay = calculateIntelligentDelay();
+        console.log(`Background: Waiting ${scrapingState.simpleDelay/1000}s before next refresh...`);
         
-        console.log(`Background: Waiting ${intelligentDelay/1000}s before refresh (anti-rate-limit)...`);
-        notifyPopup('progress', {
-            ...getCurrentProgressData(),
-            status: `Anti-rate-limit delay: ${intelligentDelay/1000}s`
-        });
+        // Wait simple delay before proceeding
+        await new Promise(resolve => setTimeout(resolve, scrapingState.simpleDelay));
         
-        // Wait intelligent delay before proceeding
-        await new Promise(resolve => setTimeout(resolve, intelligentDelay));
-        
-        console.log('Background: Refreshing page with anti-rate-limit measures...');
-        
-        // Set refresh tracking
-        scrapingState.lastRefreshTime = Date.now();
-        scrapingState.isPageLoading = true;
-        
-        // Clear any existing timeout
-        if (scrapingState.pageLoadTimeout) {
-            clearTimeout(scrapingState.pageLoadTimeout);
-        }
-        
-        // Set timeout for page loading (30 seconds max for rate-limited responses)
-        scrapingState.pageLoadTimeout = setTimeout(() => {
-            if (scrapingState.isPageLoading && scrapingState.isRunning) {
-                console.log('Background: Page load timeout detected, treating as rate limit...');
-                handleRateLimitDetection();
-            }
-        }, 30000);
+        console.log('Background: Refreshing page...');
         
         // Use Chrome tabs API to refresh the page
         await chrome.tabs.reload(scrapingState.currentTabId);
         
-        // Wait longer for page to start loading properly
+        // Wait for page to start loading then check for readiness
         setTimeout(async () => {
             try {
-                // Wait for page to be ready then extract
                 await waitForPageReady();
             } catch (error) {
                 console.error('Background: Error waiting for page ready:', error);
-                
-                // Check if this might be a rate limit error
-                if (isRateLimitError(error)) {
-                    handleRateLimitDetection();
-                } else {
-                    notifyPopup('error', `Page ready error: ${error.message}`);
-                    if (scrapingState.isRunning) {
-                        setTimeout(() => forceRefreshRecovery(), 5000);
-                    }
+                // Content script will handle page issues automatically
+                // Just try again after a short delay
+                if (scrapingState.isRunning) {
+                    setTimeout(() => refreshPageAndContinue(), 3000);
                 }
             }
-        }, 5000); // Increased to 5000ms for rate-limited responses
+        }, 2000);
 
     } catch (error) {
         console.error('Background: Error refreshing page:', error);
+        notifyPopup('error', `Refresh error: ${error.message}`);
         
-        // Check if this might be a rate limit error
-        if (isRateLimitError(error)) {
-            handleRateLimitDetection();
-        } else {
-            notifyPopup('error', `Refresh error: ${error.message}`);
-            if (scrapingState.isRunning) {
-                setTimeout(() => forceRefreshRecovery(), 5000);
-            }
+        // Try again after 3 seconds
+        if (scrapingState.isRunning) {
+            setTimeout(() => refreshPageAndContinue(), 3000);
         }
     }
 }
@@ -567,12 +761,98 @@ function notifyPopup(type, data) {
 async function saveScrapingState() {
     try {
         const stateToSave = {
-            ...scrapingState,
-            userAgents: Array.from(scrapingState.userAgents) // Convert Set to Array for storage
+            ...scrapingState
+            // userAgents is already an Array, no conversion needed
         };
         await chrome.storage.local.set({ [STORAGE_KEYS.SCRAPING_STATE]: stateToSave });
     } catch (error) {
         console.error('Background: Error saving state:', error);
+    }
+}
+
+// Auto remove duplicates when reaching milestone
+async function performAutoRemoveDuplicates() {
+    if (scrapingState.autoDuplicateRemoval.isProcessing) {
+        console.log('Background: Auto duplicate removal already in progress, skipping...');
+        return;
+    }
+
+    try {
+        scrapingState.autoDuplicateRemoval.isProcessing = true;
+        const currentCount = scrapingState.userAgents.length;
+        
+        console.log(`Background: Auto duplicate removal triggered at ${currentCount} user agents`);
+        
+        // Notify popup that auto removal is starting
+        notifyPopup('warning', `🔄 Auto-removing duplicates at ${Math.floor(currentCount / 1000)}K milestone...`);
+        
+        const beforeCount = scrapingState.userAgents.length;
+        
+        // Efficient deduplication using Map for O(1) lookup
+        const uniqueMap = new Map();
+        const uniqueArray = [];
+        
+        scrapingState.userAgents.forEach(ua => {
+            if (!uniqueMap.has(ua)) {
+                uniqueMap.set(ua, true);
+                uniqueArray.push(ua);
+            }
+        });
+        
+        const afterCount = uniqueArray.length;
+        const removedCount = beforeCount - afterCount;
+        
+        // Update state with deduplicated array
+        scrapingState.userAgents = uniqueArray;
+        
+        // Update last check count
+        scrapingState.autoDuplicateRemoval.lastCheckCount = afterCount;
+        
+        // Save updated state
+        await saveScrapingState();
+        
+        console.log(`Background: Auto removed ${removedCount} duplicates. ${afterCount} unique user agents remaining.`);
+        
+        // Notify popup with detailed results
+        if (removedCount === 0) {
+            notifyPopup('success', `✅ No duplicates found at ${Math.floor(currentCount / 1000)}K. All ${afterCount} user agents are unique.`);
+        } else {
+            notifyPopup('success', `✅ Auto-removal complete: Removed ${removedCount} duplicates, ${afterCount} valid user agents remaining`);
+        }
+        
+        return {
+            success: true,
+            beforeCount: beforeCount,
+            afterCount: afterCount,
+            removedCount: removedCount
+        };
+        
+    } catch (error) {
+        console.error('Background: Error in auto duplicate removal:', error);
+        notifyPopup('error', `❌ Auto duplicate removal failed: ${error.message}`);
+        return {
+            success: false,
+            error: error.message
+        };
+    } finally {
+        scrapingState.autoDuplicateRemoval.isProcessing = false;
+    }
+}
+
+// Check if auto duplicate removal should be triggered
+async function checkAutoRemoveDuplicates() {
+    if (!scrapingState.autoDuplicateRemoval.enabled || scrapingState.autoDuplicateRemoval.isProcessing) {
+        return;
+    }
+    
+    const currentCount = scrapingState.userAgents.length;
+    const lastCheckCount = scrapingState.autoDuplicateRemoval.lastCheckCount;
+    const checkInterval = scrapingState.autoDuplicateRemoval.checkInterval;
+    
+    // Check if we've reached the next milestone
+    if (currentCount >= lastCheckCount + checkInterval) {
+        console.log(`Background: Auto duplicate check triggered - Current: ${currentCount}, Last check: ${lastCheckCount}, Interval: ${checkInterval}`);
+        await performAutoRemoveDuplicates();
     }
 }
 
@@ -586,7 +866,7 @@ function resetScrapingState() {
     scrapingState = {
         isRunning: false,
         targetCount: 0,
-        userAgents: new Set(),
+        userAgents: [], // Reset to empty Array instead of Set
         totalScraped: 0,
         refreshCount: 0,
         currentTabId: null,
@@ -594,92 +874,44 @@ function resetScrapingState() {
         lastRefreshTime: null,
         pageLoadTimeout: null,
         isPageLoading: false,
+        tabMode: 'single',
+        multiTabs: {
+            tabA: { id: null, isActive: false, role: 'A' },
+            tabB: { id: null, isActive: false, role: 'B' },
+            tabC: { id: null, isActive: false, role: 'C' },
+            tabD: { id: null, isActive: false, role: 'D' },
+            activeTab: 'A',
+            offsetDelay: 1000 // 1 second offset between tabs
+        },
         filters: {
             android: true,
-            windows: true,
+            windows: false,
             ios: true
         },
-        antiRateLimit: {
-            minDelay: 5000,
-            maxDelay: 30000,
-            currentDelay: 5000,
-            consecutiveErrors: 0,
-            lastRequestTime: 0
+        simpleDelay: 1500,
+        autoDuplicateRemoval: {
+            enabled: true,
+            lastCheckCount: 0,
+            checkInterval: 10000, // Check every 10K user agents
+            isProcessing: false
         }
     };
 }
 
-// Calculate intelligent delay based on success/failure patterns
-function calculateIntelligentDelay() {
-    const now = Date.now();
-    const timeSinceLastRequest = now - scrapingState.antiRateLimit.lastRequestTime;
-    
-    // If we had consecutive errors, increase delay exponentially
-    if (scrapingState.antiRateLimit.consecutiveErrors > 0) {
-        const multiplier = Math.min(Math.pow(2, scrapingState.antiRateLimit.consecutiveErrors), 8);
-        scrapingState.antiRateLimit.currentDelay = Math.min(
-            scrapingState.antiRateLimit.minDelay * multiplier,
-            scrapingState.antiRateLimit.maxDelay
-        );
-    } else {
-        // Gradually reduce delay on success, but never below minimum
-        scrapingState.antiRateLimit.currentDelay = Math.max(
-            scrapingState.antiRateLimit.currentDelay * 0.9,
-            scrapingState.antiRateLimit.minDelay
-        );
-    }
-    
-    // Ensure minimum time between requests
-    const remainingMinDelay = scrapingState.antiRateLimit.minDelay - timeSinceLastRequest;
-    const finalDelay = Math.max(remainingMinDelay, scrapingState.antiRateLimit.currentDelay);
-    
-    scrapingState.antiRateLimit.lastRequestTime = now + finalDelay;
-    
-    return finalDelay;
-}
-
-// Handle rate limit detection
-function handleRateLimitDetection() {
-    scrapingState.antiRateLimit.consecutiveErrors++;
-    const backoffTime = Math.min(60000 * scrapingState.antiRateLimit.consecutiveErrors, 300000); // Max 5 minutes
-    
-    console.log(`Background: Rate limit detected! Backing off for ${backoffTime/1000} seconds...`);
-    notifyPopup('error', `Rate limit detected! Waiting ${backoffTime/1000}s before retry...`);
-    
-    // Clear loading state
-    scrapingState.isPageLoading = false;
-    if (scrapingState.pageLoadTimeout) {
-        clearTimeout(scrapingState.pageLoadTimeout);
-        scrapingState.pageLoadTimeout = null;
-    }
-    
-    // Schedule retry after backoff
-    setTimeout(() => {
-        if (scrapingState.isRunning) {
-            console.log('Background: Retrying after rate limit backoff...');
-            refreshPageAndContinue();
-        }
-    }, backoffTime);
-}
-
-// Check if error indicates rate limiting
-function isRateLimitError(error) {
-    const errorStr = error.message.toLowerCase();
-    return errorStr.includes('rate limit') ||
-           errorStr.includes('too many requests') ||
-           errorStr.includes('cloudflare') ||
-           errorStr.includes('403') ||
-           errorStr.includes('429') ||
-           errorStr.includes('blocked');
+// Simple delay calculation for multi-tab mode
+function calculateSimpleMultiTabDelay(tabMode) {
+    const baseDelay = scrapingState.simpleDelay;
+    const tabCount = tabMode === 'dual' ? 2 : 4;
+    return Math.max(baseDelay / tabCount, 800); // Minimum 800ms between tab refreshes
 }
 
 // Get current progress data for notifications
 function getCurrentProgressData() {
     return {
-        uniqueCount: scrapingState.userAgents.size,
+        uniqueCount: scrapingState.userAgents.length,
         totalScraped: scrapingState.totalScraped,
         refreshCount: scrapingState.refreshCount,
-        progress: scrapingState.targetCount > 0 ? (scrapingState.userAgents.size / scrapingState.targetCount) * 100 : 0
+        progress: scrapingState.targetCount > 0 ? (scrapingState.userAgents.length / scrapingState.targetCount) * 100 : 0
     };
 }
 
@@ -692,5 +924,313 @@ chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
         notifyPopup('stopped', 'Scraping tab was closed');
     }
 });
+
+// Multi Tab Functions (supports dual and quad modes)
+
+// Initialize multiple tabs for faster scraping
+async function initializeMultiTabs(tabRoles) {
+    try {
+        console.log(`Background: Initializing ${tabRoles.length} tabs: ${tabRoles.join(', ')}`);
+        
+        // Get current extension tab before closing others
+        const extensionTab = await getCurrentExtensionTab();
+        const keepTabs = extensionTab ? [extensionTab.id] : [];
+        
+        // Close all other tabs except extension tab for multi-tab mode
+        await closeAllOtherTabs(keepTabs);
+        
+        // Create tabs based on the roles provided
+        for (const role of tabRoles) {
+            const tab = await chrome.tabs.create({
+                url: 'https://useragents.io/random?limit=1500',
+                active: false
+            });
+            
+            // Store tab ID
+            scrapingState.multiTabs[`tab${role}`].id = tab.id;
+            console.log(`Background: Created Tab ${role}: ${tab.id}`);
+        }
+        
+        scrapingState.multiTabs.activeTab = tabRoles[0];
+        
+        console.log(`Background: Created ${tabRoles.length} tabs successfully`);
+        await saveScrapingState();
+        
+    } catch (error) {
+        console.error('Background: Error initializing multi tabs:', error);
+        throw error;
+    }
+}
+
+// Start multi tab scraping with staggered schedule
+async function startMultiTabScraping(tabRoles) {
+    if (!scrapingState.isRunning || scrapingState.tabMode === 'single') {
+        return;
+    }
+    
+    console.log(`Background: Starting ${tabRoles.length}-tab scraping coordination...`);
+    
+    // Start each tab with offset delays
+    tabRoles.forEach((role, index) => {
+        const delay = 2000 + (index * scrapingState.multiTabs.offsetDelay);
+        setTimeout(() => {
+            if (scrapingState.isRunning) {
+                console.log(`Background: Starting Tab ${role} scraping...`);
+                extractFromMultiTab(role);
+            }
+        }, delay);
+    });
+}
+
+// Extract user agents from specific multi tab
+async function extractFromMultiTab(tabRole) {
+    if (!scrapingState.isRunning || scrapingState.tabMode === 'single') {
+        return;
+    }
+    
+    const tab = scrapingState.multiTabs[`tab${tabRole}`];
+    if (!tab.id) {
+        console.error(`Background: Tab ${tabRole} not initialized`);
+        return;
+    }
+    
+    try {
+        console.log(`Background: Extracting from Tab ${tabRole} (ID: ${tab.id})...`);
+        
+        // Mark tab as active
+        scrapingState.multiTabs[`tab${tabRole}`].isActive = true;
+        
+        // Send message to content script
+        const response = await sendMessageWithRetry(tab.id, {
+            action: 'extractUserAgents',
+            filters: scrapingState.filters,
+            tabRole: tabRole
+        });
+        
+        if (response.success && response.userAgents) {
+            // Add new user agents to shared Array (no auto deduplication for performance)
+            const initialCount = scrapingState.userAgents.length;
+            response.userAgents.forEach(ua => {
+                if (ua && ua.trim()) {
+                    scrapingState.userAgents.push(ua.trim());
+                }
+            });
+            
+            const newUserAgents = scrapingState.userAgents.length - initialCount;
+            scrapingState.totalScraped += response.userAgents.length;
+            scrapingState.refreshCount++;
+            
+            // Successfully extracted data from multi-tab
+            
+            console.log(`Background: Tab ${tabRole} extracted ${response.userAgents.length} UAs, ${newUserAgents} new added, total: ${scrapingState.userAgents.length}`);
+            
+            // Check if auto duplicate removal should be triggered
+            await checkAutoRemoveDuplicates();
+            
+            // Save state and notify popup
+            await saveScrapingState();
+            notifyPopup('progress', {
+                uniqueCount: scrapingState.userAgents.length,
+                totalScraped: scrapingState.totalScraped,
+                refreshCount: scrapingState.refreshCount,
+                progress: scrapingState.targetCount > 0 ? (scrapingState.userAgents.length / scrapingState.targetCount) * 100 : 0,
+                multiTabStatus: `Tab ${tabRole} active`
+            });
+            
+            // Check if target reached
+            if (scrapingState.userAgents.length >= scrapingState.targetCount) {
+                console.log(`Background: Target reached in ${scrapingState.tabMode} tab mode!`);
+                scrapingState.isRunning = false;
+                
+                // Close all useragents.io tabs when target reached
+                await closeUserAgentTabs();
+                
+                // Reset tab references
+                scrapingState.currentTabId = null;
+                resetMultiTabIds();
+                
+                await saveScrapingState();
+                notifyPopup('completed', `Target reached! Collected ${scrapingState.userAgents.length} user agents`);
+                return;
+            }
+            
+            // Schedule next refresh for this tab
+            if (scrapingState.isRunning) {
+                scheduleNextMultiTabRefresh(tabRole);
+            }
+            
+        } else {
+            console.error(`Background: Tab ${tabRole} failed to extract user agents:`, response);
+            
+            // Check if this is a page issue that the content script should handle
+            if (response && response.error && response.error.includes('Page issue detected')) {
+                console.log(`Background: Tab ${tabRole} has page issues, content script will auto-handle`);
+                // Content script will handle the page issue automatically
+                return;
+            }
+            
+            // Try recovery for this tab
+            if (scrapingState.isRunning) {
+                setTimeout(() => recoveryMultiTab(tabRole), 2000);
+            }
+        }
+        
+    } catch (error) {
+        console.error(`Background: Error extracting from Tab ${tabRole}:`, error);
+        
+        // Try recovery for this tab
+        if (scrapingState.isRunning) {
+            setTimeout(() => recoveryMultiTab(tabRole), 2000);
+        }
+    } finally {
+        // Mark tab as inactive
+        scrapingState.multiTabs[`tab${tabRole}`].isActive = false;
+    }
+}
+
+// Schedule next refresh for multi tab
+function scheduleNextMultiTabRefresh(tabRole) {
+    if (!scrapingState.isRunning || scrapingState.tabMode === 'single') {
+        return;
+    }
+    
+    // Use simple delay calculation for multi-tab mode
+    const multiTabDelay = calculateSimpleMultiTabDelay(scrapingState.tabMode);
+    
+    console.log(`Background: Scheduling Tab ${tabRole} refresh in ${multiTabDelay/1000}s...`);
+    
+    setTimeout(async () => {
+        if (scrapingState.isRunning && scrapingState.tabMode !== 'single') {
+            await refreshMultiTab(tabRole);
+        }
+    }, multiTabDelay);
+}
+
+// Refresh specific multi tab
+async function refreshMultiTab(tabRole) {
+    if (!scrapingState.isRunning || scrapingState.tabMode === 'single') {
+        return;
+    }
+    
+    const tab = scrapingState.multiTabs[`tab${tabRole}`];
+    if (!tab.id) {
+        console.error(`Background: Tab ${tabRole} not available for refresh`);
+        return;
+    }
+    
+    try {
+        console.log(`Background: Refreshing Tab ${tabRole}...`);
+        
+        // Reload the tab
+        await chrome.tabs.reload(tab.id);
+        
+        // Wait for page to load then extract
+        setTimeout(() => {
+            if (scrapingState.isRunning) {
+                extractFromMultiTab(tabRole);
+            }
+        }, 2500); // Wait 2.5 seconds for page load (faster for multi-tab)
+        
+    } catch (error) {
+        console.error(`Background: Error refreshing Tab ${tabRole}:`, error);
+        
+        // Try recovery
+        if (scrapingState.isRunning) {
+            setTimeout(() => recoveryMultiTab(tabRole), 2000);
+        }
+    }
+}
+
+// Recovery for multi tab
+async function recoveryMultiTab(tabRole) {
+    if (!scrapingState.isRunning || scrapingState.tabMode === 'single') {
+        return;
+    }
+    
+    const tab = scrapingState.multiTabs[`tab${tabRole}`];
+    if (!tab.id) {
+        console.error(`Background: Tab ${tabRole} not available for recovery`);
+        return;
+    }
+    
+    try {
+        console.log(`Background: Recovering Tab ${tabRole}...`);
+        
+        // Navigate to fresh URL
+        await chrome.tabs.update(tab.id, {
+            url: 'https://useragents.io/random?limit=1500'
+        });
+        
+        // Wait longer for recovery then extract
+        setTimeout(() => {
+            if (scrapingState.isRunning) {
+                extractFromMultiTab(tabRole);
+            }
+        }, 4000); // Faster recovery for multi-tab
+        
+    } catch (error) {
+        console.error(`Background: Error in Tab ${tabRole} recovery:`, error);
+        notifyPopup('error', `Tab ${tabRole} recovery failed: ${error.message}`);
+    }
+}
+
+// Get current extension tab
+async function getCurrentExtensionTab() {
+    try {
+        const allTabs = await chrome.tabs.query({});
+        const extensionUrl = chrome.runtime.getURL('index.html');
+        
+        for (const tab of allTabs) {
+            if (tab.url && tab.url.includes('index.html') && tab.url.startsWith('chrome-extension://')) {
+                console.log(`Background: Found extension tab: ${tab.id}`);
+                return tab;
+            }
+        }
+        
+        console.log('Background: No extension tab found');
+        return null;
+    } catch (error) {
+        console.error('Background: Error finding extension tab:', error);
+        return null;
+    }
+}
+
+// Close all useragents.io tabs
+async function closeUserAgentTabs() {
+    try {
+        console.log('Background: Closing all useragents.io tabs...');
+        const allTabs = await chrome.tabs.query({});
+        
+        for (const tab of allTabs) {
+            // Close tabs that contain useragents.io
+            if (tab.url && tab.url.includes('useragents.io')) {
+                try {
+                    await chrome.tabs.remove(tab.id);
+                    console.log(`Background: Closed useragents.io tab: ${tab.url}`);
+                } catch (error) {
+                    console.log(`Background: Could not close tab ${tab.id}: ${error.message}`);
+                }
+            }
+        }
+        
+        console.log('Background: Finished closing useragents.io tabs');
+    } catch (error) {
+        console.error('Background: Error closing useragents.io tabs:', error);
+    }
+}
+
+// Reset multi tab IDs
+function resetMultiTabIds() {
+    scrapingState.multiTabs.tabA.id = null;
+    scrapingState.multiTabs.tabB.id = null;
+    scrapingState.multiTabs.tabC.id = null;
+    scrapingState.multiTabs.tabD.id = null;
+    scrapingState.multiTabs.tabA.isActive = false;
+    scrapingState.multiTabs.tabB.isActive = false;
+    scrapingState.multiTabs.tabC.isActive = false;
+    scrapingState.multiTabs.tabD.isActive = false;
+    scrapingState.multiTabs.activeTab = 'A';
+    console.log('Background: Multi tab IDs reset');
+}
 
 console.log('Background: Service worker initialization complete');

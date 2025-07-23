@@ -113,23 +113,64 @@
         return false;
     }
 
-    // Function untuk menunggu halaman fully loaded
+    // SIMPLE detection - hanya kata-kata spesifik
+    function detectSpecificIssues() {
+        const bodyText = document.body.textContent.toLowerCase();
+        
+        // HANYA detect challenge page
+        if (bodyText.includes('verifying you are human')) {
+            return 'cloudflare';
+        }
+        
+        // HANYA detect rate limit
+        if (bodyText.includes('too many requests')) {
+            return 'ratelimit';
+        }
+        
+        // Tidak ada logic lain yang mengganggu
+        return null;
+    }
+
+    // SIMPLE wait for table - minimal logic
     function waitForTableLoad() {
         return new Promise((resolve, reject) => {
             let attempts = 0;
-            const maxAttempts = 20; // 10 detik max
+            const maxAttempts = 10; // 5 seconds max
             
             const checkTable = () => {
                 attempts++;
+                
+                // Cek issue spesifik dulu
+                const issueType = detectSpecificIssues();
+                if (issueType) {
+                    console.log(`User Agent Scraper: ${issueType} detected, auto-refreshing...`);
+                    
+                    // Notify background
+                    chrome.runtime.sendMessage({
+                        action: 'pageIssueDetected',
+                        issueType: issueType,
+                        url: window.location.href
+                    }).catch(() => {});
+                    
+                    // Auto refresh after 3 seconds
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 3000);
+                    
+                    reject(new Error(`${issueType} detected`));
+                    return;
+                }
+                
+                // Cek table normal
                 const table = document.querySelector('table.table.table-striped tbody');
                 const rows = table ? table.querySelectorAll('tr') : [];
                 
                 if (rows.length > 0) {
-                    console.log(`User Agent Scraper: Table loaded with ${rows.length} rows`);
+                    console.log(`User Agent Scraper: Table ready with ${rows.length} rows`);
                     resolve(rows.length);
                 } else if (attempts >= maxAttempts) {
-                    console.log('User Agent Scraper: Timeout waiting for table');
-                    reject(new Error('Timeout waiting for table to load'));
+                    console.log('User Agent Scraper: Timeout, proceeding anyway');
+                    resolve(0);
                 } else {
                     setTimeout(checkTable, 500);
                 }

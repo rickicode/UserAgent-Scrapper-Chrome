@@ -7,7 +7,8 @@ Chrome extension untuk scraping user agents dari [useragents.io](https://userage
 - **Auto Scraping**: Otomatis membuka tab useragents.io dan scraping data
 - **Target Fleksibel**: Set target jumlah user agents (100 - 100,000)
 - **Fast Auto Refresh**: Refresh otomatis secepat mungkin untuk mengumpulkan data baru
-- **Deduplication**: Otomatis menghilangkan user agents duplikat
+- **Smart Deduplication**: Otomatis menghilangkan user agents duplikat setiap 10K milestone
+- **Auto Remove Duplicates**: Pembersihan duplikat otomatis untuk performa optimal
 - **Progress Tracking**: Real-time progress bar dan statistik
 - **Manual Check**: Tombol manual untuk check duplicates
 - **Copy to Clipboard**: Copy semua hasil dengan satu klik
@@ -25,22 +26,51 @@ Chrome extension untuk scraping user agents dari [useragents.io](https://userage
 
 ## 🎯 Cara Penggunaan
 
-1. **Set Target**: Masukkan jumlah user agents yang diinginkan (contoh: 10000)
-2. **Start Scraping**: Klik tombol "Start Scraping"
-3. **Monitor Progress**: Lihat progress bar dan statistik real-time
-4. **Auto Process**: Extension akan otomatis:
-   - Membuka tab useragents.io
+1. **Buka Extension**: Klik icon extension di toolbar untuk membuka full page interface
+   - Extension akan otomatis menutup semua tab lain untuk performa optimal
+   - Hanya tersisa tab extension dan nantinya tab scraping
+2. **Set Target**: Masukkan jumlah user agents yang diinginkan (contoh: 10000)
+3. **Start Scraping**: Klik tombol "Start Scraping"
+   - **Auto close semua tab** yang sedang terbuka
+   - Buat tab baru untuk scraping useragents.io
+4. **Monitor Progress**: Lihat progress bar dan statistik real-time
+5. **Auto Process**: Extension akan otomatis:
    - Mengekstrak user agents dari tabel
    - Refresh halaman setiap 2-3 detik
-   - Menghilangkan duplikasi otomatis
+   - **Auto remove duplicates setiap 10K milestone**
    - Berhenti ketika target tercapai
-5. **Setup Auto-Save (Opsional)**:
+6. **Setup Auto-Save (Opsional)**:
    - Centang "Auto-save to USER_AGENTS.TXT when complete"
    - Klik "Select Directory" untuk memilih folder tujuan
    - Bisa memilih beberapa folder untuk menyimpan ke multiple lokasi
    - File akan otomatis tersimpan ketika scraping selesai
-6. **Copy Results**: Klik "Copy All" untuk copy semua user agents
-7. **Check Duplicates**: Klik "Check Duplicates" untuk manual verification
+7. **Copy Results**: Klik "Copy All" untuk copy semua user agents
+8. **Check Duplicates**: Klik "Check Duplicates" untuk manual verification
+
+## 🔄 Auto Remove Duplicates
+
+Extension sekarang dilengkapi dengan sistem **Smart Auto Remove Duplicates** yang bekerja otomatis:
+
+### 📋 Cara Kerja
+- **Milestone Check**: Otomatis mengecek duplikat setiap 10,000 user agents terkumpul
+- **Smart Logic**: Jika tidak ada duplikat di 10K, akan check lagi di 20K, 30K, dst.
+- **Background Process**: Berjalan tanpa mengganggu proses scraping
+- **Real-time Notification**: Menampilkan notifikasi hasil pembersihan
+
+### 📊 Contoh Timeline
+```
+Target: 50,000 user agents
+├── 10K: Auto remove duplicates (misal: 0 duplikat ditemukan)
+├── 20K: Auto remove duplicates (misal: 1,247 duplikat dihapus)
+├── 30K: Auto remove duplicates (misal: 876 duplikat dihapus)
+├── 40K: Auto remove duplicates (misal: 543 duplikat dihapus)
+└── 50K: Selesai + Auto-save (jika aktif)
+```
+
+### 🔔 Notifikasi Auto Remove
+- **Start**: "🔄 Auto-removing duplicates at 10K milestone..."
+- **Success**: "✅ Auto-removal complete: Removed 1,247 duplicates, 8,753 valid user agents remaining"
+- **No Duplicates**: "✅ No duplicates found at 10K. All 10,000 user agents are unique."
 
 ## 📊 Perhitungan Otomatis
 
@@ -56,8 +86,8 @@ Estimasi waktu: ~1-2 detik per refresh (optimized untuk kecepatan maksimal)
 ```
 user-agent-scraper/
 ├── manifest.json          # Konfigurasi extension
-├── popup.html             # UI popup extension
-├── popup.js               # Logic popup
+├── index.html             # UI extension (full page)
+├── index.js               # Logic UI extension
 ├── styles.css             # Styling UI
 ├── content.js             # Script scraping di useragents.io
 ├── background.js          # Service worker koordinasi
@@ -138,6 +168,22 @@ Extension memerlukan permissions berikut:
 - Pastikan permission folder sudah diberikan saat dialog muncul
 
 ## 📝 Changelog
+
+### Version 1.3.0
+- **NEW**: Auto Close All Tabs - otomatis menutup semua tab saat mulai scraping untuk performa maksimal
+- **ENHANCED**: Full Page Extension UI - tidak lagi menggunakan sidebar, sekarang membuka tab penuh
+- **IMPROVED**: Clean Workspace - hanya menyisakan tab extension dan tab scraping yang aktif
+- **OPTIMIZED**: Resource Management - mengurangi beban browser dengan menutup tab yang tidak diperlukan
+- **UPGRADED**: File Structure - popup.html → index.html, popup.js → index.js untuk konsistensi full page
+- **REFACTORED**: Complete UI architecture untuk full page experience
+
+### Version 1.2.0
+- **NEW**: Smart Auto Remove Duplicates - pembersihan duplikat otomatis setiap 10K user agents
+- **ENHANCED**: Progressive milestone checking untuk performa optimal
+- **IMPROVED**: Real-time notifications dengan detail hasil duplicate removal
+- **ADDED**: Background process untuk auto cleanup tanpa mengganggu scraping
+- **OPTIMIZED**: Memory usage dengan pembersihan berkala data duplikat
+- **UPGRADED**: Status notifications dengan emoji dan informasi lengkap
 
 ### Version 1.1.0
 - **NEW**: Auto-save functionality menggunakan File System Access API
